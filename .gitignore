@@ -1,0 +1,15 @@
+*.png
+saved_models/
+*.pth
+*.pt
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.venv/
+venv/
+env/
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
