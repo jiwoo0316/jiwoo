@@ -1,5 +1,6 @@
 import matplotlib.pyplot as plt
 import torch
+import numpy as np
 
 
 def calculate_snr_for_target_ser(snrs, sers, target_ser):
@@ -24,7 +25,6 @@ def evaluate_ablation_model(model_complex, model_mag, simulator, snr_list, impai
     2) Grouped-bin classical baseline
     3) Magnitude-only CNN
     4) Complex-input CNN
-
     """
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model_complex.to(device).eval()
@@ -89,22 +89,51 @@ def evaluate_ablation_model(model_complex, model_mag, simulator, snr_list, impai
             f"[Mag CNN]:{results['Mag CNN'][-1]:.5f} | [Grp]:{results['Grouped'][-1]:.5f}"
         )
 
-    # 그래프 저장
+    # ========================================================
+    # 그래프 저장 — 4개 방법 전부 표시
+    # ========================================================
     filename = f"ser_curve_{benchmark_name.lower().replace(' ', '_')}.png"
-    plt.figure(figsize=(10, 7))
-    plt.semilogy(snr_list, results["Naive"], marker="x", linestyle=":", color="gray", alpha=0.7, label="Naive FFT")
-    plt.semilogy(snr_list, results["Complex CNN"], marker="o", linestyle="-", color="red", linewidth=2, label="Complex Input CNN")
 
-    plt.grid(True, which="both", ls="--", alpha=0.5)
-    plt.xlabel("Signal-to-Noise Ratio (SNR) [dB]", fontsize=12)
-    plt.ylabel("Symbol Error Rate (SER)", fontsize=12)
-    plt.title(f"LoRa Demodulation Performance: {benchmark_name}", fontsize=14)
-    plt.ylim([5e-5, 1.1])
-    plt.legend(fontsize=11, loc="lower left")
+    # SER이 0인 점은 log 스케일에서 표시할 수 없으므로 필터링
+    def plot_nonzero(ax, snrs, sers, **kwargs):
+        snrs_f = [s for s, e in zip(snrs, sers) if e > 0]
+        sers_f = [e for e in sers if e > 0]
+        if snrs_f:
+            ax.semilogy(snrs_f, sers_f, **kwargs)
+
+    fig, ax = plt.subplots(figsize=(10, 7))
+
+    plot_nonzero(ax, snr_list, results["Naive"],
+                 marker="x", linestyle=":", color="gray", alpha=0.5,
+                 label="Naive FFT", markersize=8)
+
+    plot_nonzero(ax, snr_list, results["Grouped"],
+                 marker="s", linestyle="--", color="black",
+                 label="Grouped-Bin Classical", markersize=7, linewidth=1.5)
+
+    plot_nonzero(ax, snr_list, results["Mag CNN"],
+                 marker="^", linestyle="-.", color="orange",
+                 label="Mag Input CNN (Ablation)", markersize=8, linewidth=1.5)
+
+    plot_nonzero(ax, snr_list, results["Complex CNN"],
+                 marker="o", linestyle="-", color="red",
+                 label="Complex Input CNN (Proposed)", markersize=8, linewidth=2.5)
+
+    ax.grid(True, which="both", ls="--", alpha=0.5)
+    ax.set_xlabel("Signal-to-Noise Ratio (SNR) [dB]", fontsize=13)
+    ax.set_ylabel("Symbol Error Rate (SER)", fontsize=13)
+    ax.set_title(f"LoRa Demodulation Performance: {benchmark_name}", fontsize=14, fontweight="bold")
+    ax.set_ylim([5e-5, 1.1])
+    ax.set_xlim([snr_list[0] - 0.5, snr_list[-1] + 0.5])
+    ax.legend(fontsize=11, loc="lower left")
+
+    plt.tight_layout()
     plt.savefig(filename, dpi=300, bbox_inches="tight")
     plt.close()
 
+    # ========================================================
     # Threshold Gain 정량화 표 출력
+    # ========================================================
     print(f"\n[{benchmark_name}] Threshold Gain 분석표")
     print("=" * 60)
     print(f"{'Method':<20} | {'SNR for SER=1e-1':<15} | {'SNR for SER=1e-2':<15}")
