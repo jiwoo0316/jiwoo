@@ -10,18 +10,6 @@ from training import train_research_model
 from evaluation import evaluate_ablation_model
 
 
-# ============================================================
-# 7. 메인 실행 블록
-# ------------------------------------------------------------
-# 순서:
-# 1) 시뮬레이터 생성
-# 2) Complex CNN 초기화/학습(or 로드)
-# 3) Mag CNN 초기화/학습(or 로드)
-# 4) 3개 시나리오에서 benchmark 수행
-#    - Scenario A: Pure AWGN
-#    - Scenario B: Seen Impaired
-#    - Scenario C: Unseen Impaired
-# ============================================================
 def main():
     set_seed()
     os.makedirs("saved_models", exist_ok=True)
@@ -30,30 +18,32 @@ def main():
     sim = LoRaResearchSimulator(sf=7, bw=125e3, fs=1e6)
 
     # 두 모델 초기화
-    # Complex CNN: Real/Imag 2채널 입력
-    # Mag CNN: magnitude-only 1채널 입력
     model_comp = LoRaCNN(num_classes=sim.M, input_length=sim.N, in_channels=2)
     model_mag = LoRaCNN(num_classes=sim.M, input_length=sim.N, in_channels=1)
 
-    path_comp = "saved_models/lora_comp_cnn_v2.pth"
-    path_mag = "saved_models/lora_mag_cnn_v2.pth"
+    # [개선 1] 파일명을 바꿔서 기존 모델과 구분
+    path_comp = "saved_models/lora_comp_cnn_v3.pth"
+    path_mag = "saved_models/lora_mag_cnn_v3.pth"
 
-    # 학습 시 사용할 impaired 환경
+    # [개선 1] 훈련 시 기본 config (randomize_channel=True일 때는 참고용)
     train_config = {"use_cfo": True, "max_cfo_bins": 0.35, "use_multipath": True}
+
+    # [개선 1] SNR 범위를 (-25, 0)으로 확대 (기존: -20, 0)
+    train_snr_range = (-25, 0)
     total_samples = 40000
 
     # 1. Complex CNN 훈련 또는 로드
     if os.path.exists(path_comp):
-        # 이미 학습된 가중치가 있으면 재사용
         model_comp.load_state_dict(torch.load(path_comp, map_location=torch.device("cpu")))
     else:
         print(">> [학습 1/2] Complex CNN 훈련 중...")
         ds_comp = LoRaResearchDataset(
             sim,
             total_samples,
-            (-20, 0),
+            train_snr_range,
             train_config,
             feature_type="complex",
+            randomize_channel=True,  # [개선 1] 채널 랜덤화 활성화
         )
         dl_train, dl_val = random_split(
             ds_comp,
@@ -75,9 +65,10 @@ def main():
         ds_mag = LoRaResearchDataset(
             sim,
             total_samples,
-            (-20, 0),
+            train_snr_range,
             train_config,
             feature_type="mag",
+            randomize_channel=True,  # [개선 1] 채널 랜덤화 활성화
         )
         dl_train, dl_val = random_split(
             ds_mag,
@@ -117,10 +108,10 @@ def main():
     # Scenario C: Unseen Impaired
     config_unseen = {
         "use_cfo": True,
-        "max_cfo_bins": 0.45,          # CFO 범위 증가
+        "max_cfo_bins": 0.45,
         "use_multipath": True,
-        "multipath_taps": [0.9, -0.6j, 0.4],  # 학습 때와 다른 tap 패턴
-        "multipath_delays": [0, 4, 9],        # 더 긴 delay
+        "multipath_taps": [0.9, -0.6j, 0.4],
+        "multipath_delays": [0, 4, 9],
     }
     evaluate_ablation_model(
         model_comp,

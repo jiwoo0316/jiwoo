@@ -10,8 +10,8 @@ class LoRaResearchDataset(Dataset):
       - mag 입력 (1채널)
     을 생성할 수 있도록 만든 데이터셋.
 
-    같은 채널 환경에서 입력 표현만 다르게 하여
-    complex CNN vs magnitude-only CNN을 공정하게 비교하기 위한 용도임.
+    [개선 1] 매 샘플마다 채널 파라미터를 랜덤화하여
+    다양한 CFO/Multipath 환경을 학습에 반영함.
     """
 
     def __init__(
@@ -22,10 +22,12 @@ class LoRaResearchDataset(Dataset):
         impairment_config: dict,
         mode: str = "train",
         feature_type: str = "complex",
+        randomize_channel: bool = False,
     ):
         self.simulator = simulator
         self.num_samples = num_samples
         self.feature_type = feature_type
+        self.randomize_channel = randomize_channel
 
         print(f"[{mode.upper()} | {feature_type.upper()}] {num_samples}개의 데이터 생성 중...")
         self.data_x = []
@@ -49,8 +51,14 @@ class LoRaResearchDataset(Dataset):
                 else snr_range
             )
 
+            # [개선 1] 훈련 시 매 샘플마다 채널 파라미터 랜덤화
+            if self.randomize_channel and mode == "train":
+                sample_config = self._random_impairment_config()
+            else:
+                sample_config = impairment_config
+
             # 채널 왜곡 적용
-            noisy_sig = self.simulator.apply_impaired_channel(clean_sig, target_snr, impairment_config)
+            noisy_sig = self.simulator.apply_impaired_channel(clean_sig, target_snr, sample_config)
 
             # feature_type에 따라 특징 추출 방식 선택
             if self.feature_type == "complex":
@@ -60,6 +68,49 @@ class LoRaResearchDataset(Dataset):
 
             self.data_x.append(torch.tensor(features, dtype=torch.float32))
             self.data_y.append(torch.tensor(label, dtype=torch.long))
+
+    @staticmethod
+    def _random_impairment_config():
+        """
+        매 샘플마다 호출되어 완전히 랜덤한 채널 환경을 생성함.
+
+        - CFO: ±0.1 ~ ±0.5 bin 범위에서 균일 랜덤
+        - Multipath: tap 수 2~4개, 크기/위상 랜덤, delay 랜덤
+        - 일부 확률로 AWGN-only 환경도 섞어줌 (20%)
+        """
+        # 20% 확률로 깨끗한 AWGN-only
+        if np.random.rand() < 0.2:
+            return {"use_cfo": False, "use_multipath": False}
+
+        # CFO 랜덤화
+        use_cfo = np.random.rand() < 0.8  # 80% 확률로 CFO 사용
+        max_cfo_bins = np.random.uniform(0.05, 0.5) if use_cfo else 0.0
+
+        # Multipath 랜덤화
+        use_multipath = np.random.rand() < 0.8  # 80% 확률로 multipath 사용
+        taps = [1.0]
+        delays = [0]
+
+        if use_multipath:
+            num_extra_taps = np.random.randint(1, 4)  # 반사파 1~3개
+            for _ in range(num_extra_taps):
+                mag = np.random.uniform(0.1, 0.7)
+                phase = np.random.uniform(0, 2 * np.pi)
+                taps.append(mag * np.exp(1j * phase))
+
+            # delay는 1~12 범위에서 겹치지 않게 선택
+            extra_delays = sorted(
+                np.random.choice(range(1, 13), num_extra_taps, replace=False).tolist()
+            )
+            delays.extend(extra_delays)
+
+        return {
+            "use_cfo": use_cfo,
+            "max_cfo_bins": max_cfo_bins,
+            "use_multipath": use_multipath,
+            "multipath_taps": taps,
+            "multipath_delays": delays,
+        }
 
     def __len__(self):
         return self.num_samples
